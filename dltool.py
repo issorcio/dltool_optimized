@@ -265,7 +265,7 @@ if not args.list:
             file = open(localpath, 'ab')
             
             size, unit = scale1024(remotefilesize)
-            pbar = ProgressBar(widgets=['\033[96m', Percentage(), ' | ', DataSize(), f' / {round(size, 1)} {unit}', ' ', Bar(marker='#'), ' ', ETA(), ' | ', FileTransferSpeed(), '\033[00m'], max_value=remotefilesize, redirect_stdout=True)
+            pbar = ProgressBar(widgets=['\033[96m', Percentage(), ' | ', DataSize(), f' / {round(size, 1)} {unit}', ' ', Bar(marker='#'), ' ', ETA(), ' | ', FileTransferSpeed(), '\033[00m'], max_value=remotefilesize, redirect_stdout=True, max_error=False)
             pbar.start()
             
             if resumedl:
