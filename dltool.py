@@ -133,8 +133,7 @@ for datchild in datroot:
             logger(f'Processing {system}...', 'green')
     #Add found ROMs to wanted list
     elif datchild.tag == 'game':
-        rom = datchild.find('rom')
-        filename = rom.attrib['name']
+        filename = datchild.attrib['name']
         filename = re.sub(r'\.[(a-zA-Z0-9)]{1,3}\Z', '', filename)
         if filename not in wantedroms:
             wantedroms.append(filename)
