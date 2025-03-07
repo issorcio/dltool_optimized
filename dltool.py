@@ -270,7 +270,7 @@ if not args.list:
             if resumedl:
                 logger(f'Resuming    {str(dlcounter).zfill(len(str(len(wantedfiles))))}/{len(wantedfiles)}: {wantedfile["name"]}', 'cyan')
                 pbar += localfilesize
-                headers = REQHEADERS
+                headers = REQHEADERS.copy()
                 headers.update({'Range': f'bytes={localfilesize}-'})
                 resp = requests.get(wantedfile['url'], headers=headers, stream=True)
                 for data in resp.iter_content(chunk_size=CHUNKSIZE):
