@@ -85,7 +85,10 @@ parser = argparse.ArgumentParser(
 #Add required arguments
 requiredargs = parser.add_argument_group('\033[91mRequired arguments\033[00m')
 requiredargs.add_argument('-i', dest='inp', metavar='nointro.dat', help='Input DAT-file containing wanted ROMs', required=True)
-requiredargs.add_argument('-o', dest='out', metavar='/data/roms', help='Output path for ROM files to be downloaded', required=True)
+required_output_group = requiredargs.add_mutually_exclusive_group(required=True)
+required_output_group.add_argument('-o', dest='out', metavar='/data/roms', help='Output path for ROM files to be downloaded')
+required_output_group.add_argument('-t', dest='text_file', metavar='rom_urls.txt', help='Output text file to write URLs of found ROMs instead of downloading them')
+
 #Add optional arguments
 optionalargs = parser.add_argument_group('\033[96mOptional arguments\033[00m')
 optionalargs.add_argument('-c', dest='catalog', action='store_true', help='Choose catalog manually, even if automatically found')
@@ -108,12 +111,12 @@ foundcollections = []
 if not os.path.isfile(args.inp):
     logger('Invalid input DAT-file!', 'red')
     exit()
-if not os.path.isdir(args.out):
+if not args.text_file and not os.path.isdir(args.out):
     logger('Invalid output ROM path!', 'red')
     exit()
 
 # Clean arguments
-args.out = args.out.rstrip(PATH_SEPARATOR)
+if args.out: args.out = args.out.rstrip(PATH_SEPARATOR)
 
 #Open input DAT-file
 logger('Opening input DAT-file...', 'green')
@@ -238,6 +241,14 @@ logger(f'Amount of wanted ROMs in DAT-file   : {len(wantedroms)}', 'green')
 logger(f'Amount of found ROMs at server      : {len(wantedfiles)}', 'green')
 if missingroms:
     logger(f'Amount of missing ROMs at server    : {len(missingroms)}', 'yellow')
+
+
+if args.text_file:
+    with open(args.text_file, 'w') as f:
+        for wantedfile in wantedfiles:
+            f.write(wantedfile['url'] + '\n')
+    logger(f'URLs dumped to {args.text_file}', 'green')
+    exit()
 
 #Download wanted files
 if not args.list:
