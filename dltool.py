@@ -31,6 +31,9 @@ REQHEADERS = {
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7'
 }
 
+UNIX_SYSTEMS = {'Linux', 'Darwin'}
+PATH_SEPARATOR = '/' if platform.system() in UNIX_SYSTEMS else '\\'
+
 #Print output function
 def logger(str, color=None, rewrite=False):
     colors = {'red': '\033[91m', 'green': '\033[92m', 'yellow': '\033[93m', 'cyan': '\033[96m'}
@@ -108,10 +111,9 @@ if not os.path.isfile(args.inp):
 if not os.path.isdir(args.out):
     logger('Invalid output ROM path!', 'red')
     exit()
-if platform.system() == 'Linux' and args.out[-1] == '/':
-    args.out = args.out[:-1]
-elif platform.system() == 'Windows' and args.out[-1] == '\\':
-    args.out = args.out[:-1]
+
+# Clean arguments
+args.out = args.out.rstrip(PATH_SEPARATOR)
 
 #Open input DAT-file
 logger('Opening input DAT-file...', 'green')
@@ -245,10 +247,7 @@ if not args.list:
         resumedl = False
         proceeddl = True
         
-        if platform.system() == 'Linux':
-            localpath = f'{args.out}/{wantedfile["file"]}'
-        elif platform.system() == 'Windows':
-            localpath = f'{args.out}\{wantedfile["file"]}'
+        localpath = f'{args.out}{PATH_SEPARATOR}{wantedfile["file"]}'
         
         resp = requests.get(wantedfile['url'], headers=REQHEADERS, stream=True)
         remotefilesize = int(resp.headers.get('content-length'))
