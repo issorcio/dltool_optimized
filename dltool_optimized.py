@@ -1,17 +1,18 @@
-# Required packages: requests, beautifulsoup4, progressbar2
-# Install using: pip install requests beautifulsoup4 progressbar2
+# Required packages: requests, beautifulsoup4
+# Install using: pip install requests beautifulsoup4
+# System requirement: wget must be installed
 import os
 import sys
 import re
 import math
 import signal
+import subprocess
 import argparse
 import datetime
 import requests
 import textwrap
 import xml.etree.ElementTree as ET # For parsing DAT files
 from bs4 import BeautifulSoup      # For parsing HTML
-from progressbar import ProgressBar, Bar, ETA, FileTransferSpeed, Percentage, DataSize # For download progress
 
 #Define constants
 #Myrient HTTP-server addresses
@@ -27,9 +28,7 @@ DATPOSTFIXES = [
     ' (Retool)'
     # Add other postfixes if needed
 ]
-#Chunk sizes to download in bytes
-CHUNKSIZE = 8192
-#Headers to use in HTTP-requests to mimic a browser
+#Headers to use in HTTP-requests to mimic a browser (used for Myrient navigation only)
 REQHEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7'
@@ -467,143 +466,59 @@ else: # Proceed with download
         counter_str = str(dlcounter).zfill(num_digits_for_counter)
         log_prefix = f"[{counter_str}/{total_files_to_download}]"
 
-        # Default states for download decision
-        proceed_with_download = True
-        resume_download = False
-        file_open_mode = 'wb' # Write binary, overwrite if exists (default)
-        local_file_size = 0 
-        remote_file_size = None 
+        # Check if file exists and --skip-existing is enabled
+        if args.skipexisting and os.path.isfile(localpath):
+            logger(f"{log_prefix} Skipping (--skip-existing): {wantedfile_details['name']} already exists.", 'green', rewrite=(dlcounter > 1))
+            continue  # Skip to next file
 
-        # Check if local file exists
-        if os.path.isfile(localpath):
-            local_file_size = os.path.getsize(localpath)
-            # If --skip-existing is used, mark not to proceed with download
-            if args.skipexisting:
-                proceed_with_download = False
-                logger(f"{log_prefix} Skipping (--skip-existing): File {wantedfile_details['name']} already exists locally.", 'green', rewrite=(dlcounter > 1))
+        # --- Download using wget ---
+        logger(f"{log_prefix} Downloading: {wantedfile_details['name']}", 'cyan', rewrite=(dlcounter > 1))
 
-        # If not skipping due to --skip-existing, perform size checks
-        if proceed_with_download: 
-            try:
-                logger(f"{log_prefix} Checking: {wantedfile_details['name']}...", "cyan", rewrite=(dlcounter > 1))
-                # Perform a HEAD request to get remote file size without downloading content
-                head_resp = requests.head(wantedfile_details['url'], headers=REQHEADERS, timeout=30, allow_redirects=True)
-                head_resp.raise_for_status()
+        # Build wget command with appropriate flags
+        wget_cmd = [
+            'wget',
+            '-c',                      # Continue/resume partial downloads
+            '-O', localpath,           # Output file path
+            '--timeout=600',           # 10 minutes timeout
+            '--tries=3',               # Retry up to 3 times on errors
+            '--progress=bar:force',    # Force progress bar display
+            '--show-progress',         # Show progress statistics
+            '-q',                      # Quiet mode (only show progress)
+            wantedfile_details['url']  # URL to download
+        ]
 
-                if 'content-length' not in head_resp.headers:
-                    logger(f"{log_prefix} Warning: Server did not provide content-length for {wantedfile_details['file']}. Cannot verify size. Will download if local file is absent.", 'yellow', rewrite=True)
-                    remote_file_size = None
-                else:
-                    remote_file_size = int(head_resp.headers.get('content-length', 0))
+        try:
+            # Execute wget and capture result
+            result = subprocess.run(wget_cmd, check=False, capture_output=False)
 
-                # Logic if local file exists (and --skip-existing was NOT used)
-                if os.path.isfile(localpath): 
-                    if remote_file_size is not None: # If remote size is known
-                        if local_file_size < remote_file_size:
-                            resume_download = True
-                            file_open_mode = 'ab' # Append binary mode for resume
-                            logger(f"{log_prefix} Resuming: {wantedfile_details['name']} (Local: {scale1024(local_file_size)} / Remote: {scale1024(remote_file_size)})", 'cyan', rewrite=True)
-                        elif local_file_size == remote_file_size:
-                            proceed_with_download = False # Already downloaded and size matches
-                            logger(f"{log_prefix} Already Downloaded (Exact Size): {wantedfile_details['name']}", 'green', rewrite=True)
-                        else: # local_file_size > remote_file_size
-                            logger(f"{log_prefix} Warning: Local file {wantedfile_details['file']} is larger ({scale1024(local_file_size)}) than remote ({scale1024(remote_file_size)}). Re-downloading.", 'yellow', rewrite=True)
-                            resume_download = False # Force re-download from scratch
-                            file_open_mode = 'wb'
-                            local_file_size = 0 # For progress bar, treat as new download
-                    else: # Remote size unknown, but local file exists
-                        proceed_with_download = False 
-                        logger(f"{log_prefix} Skipping: Local file exists, remote size unknown: {wantedfile_details['name']}", 'green', rewrite=True)
-                # If local file does not exist, proceed_with_download remains True
-                
-            except requests.exceptions.RequestException as e_head:
-                logger(f"\n{log_prefix} Network Error checking {wantedfile_details['name']}: {e_head}. Will attempt download if local file is absent.", 'red', rewrite=False)
-                if os.path.isfile(localpath): # If HEAD failed but local file exists
-                    proceed_with_download = False 
-                    logger(f"{log_prefix} Skipping: Local file exists, cannot verify remote size due to network error: {wantedfile_details['name']}", 'yellow', rewrite=True)
-                # If local file does not exist, proceed_with_download remains True for download attempt
-        
-        # --- Perform Download if proceed_with_download is True ---
-        if proceed_with_download:
-            current_headers_for_get = REQHEADERS.copy()
-            log_action_message = ""
-            # This will be the total size for the progress bar
-            effective_remotesize_for_pbar = remote_file_size 
+            # Check wget exit code
+            if result.returncode == 0:
+                logger(f"{log_prefix} Downloaded: {wantedfile_details['name']}", 'green', rewrite=False)
+            elif result.returncode == 1:
+                logger(f"{log_prefix} Error downloading {wantedfile_details['name']}: Generic wget error", 'red', rewrite=False)
+            elif result.returncode == 3:
+                logger(f"{log_prefix} Error downloading {wantedfile_details['name']}: File I/O error", 'red', rewrite=False)
+            elif result.returncode == 4:
+                logger(f"{log_prefix} Error downloading {wantedfile_details['name']}: Network failure", 'red', rewrite=False)
+            elif result.returncode == 5:
+                logger(f"{log_prefix} Error downloading {wantedfile_details['name']}: SSL verification failure", 'red', rewrite=False)
+            elif result.returncode == 6:
+                logger(f"{log_prefix} Error downloading {wantedfile_details['name']}: Authentication failure", 'red', rewrite=False)
+            elif result.returncode == 7:
+                logger(f"{log_prefix} Error downloading {wantedfile_details['name']}: Protocol error", 'red', rewrite=False)
+            elif result.returncode == 8:
+                logger(f"{log_prefix} Error downloading {wantedfile_details['name']}: Server error", 'red', rewrite=False)
+            else:
+                logger(f"{log_prefix} Error downloading {wantedfile_details['name']}: Wget exit code {result.returncode}", 'red', rewrite=False)
 
-            if resume_download:
-                log_action_message = f"Resuming: {wantedfile_details['name']}"
-                # Set Range header for resuming download
-                current_headers_for_get['Range'] = f'bytes={local_file_size}-'
-            else: 
-                log_action_message = f"Downloading: {wantedfile_details['name']}"
-                # If not resuming, local_file_size for progress bar starts at 0 (already set if overwriting)
-            
-            logger(f"{log_prefix} {log_action_message}", 'cyan', rewrite=True) # Rewrite previous "Checking..." message
-
-            try:
-                # Perform the GET request to download the file
-                resp_get = requests.get(wantedfile_details['url'], headers=current_headers_for_get, stream=True, timeout=600) # Long timeout for download
-                resp_get.raise_for_status()
-
-                # Try to determine the total file size for the progress bar, especially for resumed downloads
-                if 'content-range' in resp_get.headers and resume_download: 
-                     # Content-Range header (e.g., "bytes 100-199/200") is more reliable for total size in resumed downloads
-                     content_range = resp_get.headers['content-range']
-                     match = re.search(r'/(\d+)$', content_range) # Extract total size
-                     if match:
-                          effective_remotesize_for_pbar = int(match.group(1))
-                elif effective_remotesize_for_pbar is None and 'content-length' in resp_get.headers: 
-                     # Fallback if HEAD failed or if it's a new download and HEAD didn't provide size
-                     effective_remotesize_for_pbar = int(resp_get.headers.get('content-length',0))
-                     if resume_download and effective_remotesize_for_pbar != remote_file_size : 
-                         # If resuming and GET content-length is for the remaining part, add already downloaded part
-                         effective_remotesize_for_pbar += local_file_size
-                
-                pbar = None # Initialize progress bar variable
-                if effective_remotesize_for_pbar is not None and effective_remotesize_for_pbar > 0:
-                    scaled_size_str = scale1024(effective_remotesize_for_pbar)
-                    widgets = [
-                        '\033[96m', Percentage(), ' | ', DataSize(), f' / {scaled_size_str}', ' ',
-                        Bar(marker='#'), ' ', ETA(), ' | ', FileTransferSpeed(), '\033[00m'
-                    ]
-                    try:
-                       # Attempt to initialize and start the progress bar
-                       pbar = ProgressBar(widgets=widgets, max_value=effective_remotesize_for_pbar, redirect_stdout=True, term_width=100).start()
-                       # Set initial progress if resuming
-                       if resume_download and local_file_size > 0 and local_file_size < effective_remotesize_for_pbar: 
-                            pbar.update(local_file_size)
-                       elif not resume_download: # For new downloads, start progress from 0
-                            pbar.update(0)
-                    except Exception as pbar_ex: # Catch any error during progress bar setup
-                       logger(f"{log_prefix} Warning: Could not initialize progress bar: {pbar_ex}", "yellow")
-                       pbar = None # Disable progress bar if it fails
-                else: 
-                     logger(f"{log_prefix} Downloading {wantedfile_details['name']} (Size for progress bar unknown or zero)...", 'cyan', rewrite=True)
-
-                # Write file content chunk by chunk
-                with open(localpath, file_open_mode) as file_handle:
-                    current_progress_bytes = local_file_size if resume_download else 0
-                    for data_chunk in resp_get.iter_content(chunk_size=CHUNKSIZE):
-                        file_handle.write(data_chunk)
-                        if pbar: # If progress bar is active
-                             try:
-                                 current_progress_bytes += len(data_chunk)
-                                 # Ensure progress doesn't exceed max_value, can happen with incorrect server headers
-                                 pbar.update(min(current_progress_bytes, pbar.max_value))
-                             except Exception: 
-                                 pbar = None # Stop trying to update pbar if it errors
-
-                if pbar: # Finish progress bar if it was used
-                    pbar.finish()
-
-                logger(f"{log_prefix} Downloaded: {wantedfile_details['name']}", 'green', rewrite=True)
-
-            except requests.exceptions.RequestException as e_get:
-                logger(f"\n{log_prefix} Network Error downloading {wantedfile_details['name']}: {e_get}", 'red', rewrite=False)
-            except (IOError, OSError) as e_io:
-                logger(f"\n{log_prefix} File Error writing {wantedfile_details['file']} to {output_dir}: {e_io}", 'red', rewrite=False)
-            except Exception as e_generic: # Catch any other unexpected errors during download
-                 logger(f"\n{log_prefix} Unexpected Error downloading {wantedfile_details['name']}: {e_generic}", 'red', rewrite=False)
+        except FileNotFoundError:
+            logger(f"{log_prefix} ERROR: wget is not installed or not in PATH. Please install wget.", 'red', rewrite=False)
+            logger("On Debian/Ubuntu: sudo apt-get install wget", 'red')
+            logger("On Fedora/RHEL: sudo dnf install wget", 'red')
+            logger("On macOS: brew install wget", 'red')
+            sys.exit(1)
+        except Exception as e_generic:
+            logger(f"{log_prefix} Unexpected error running wget for {wantedfile_details['name']}: {e_generic}", 'red', rewrite=False)
 
     # Final message after all downloads attempted
     if total_files_to_download > 0 and not args.list:

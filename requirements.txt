@@ -1,3 +1,6 @@
+# Python dependencies
 requests
 beautifulsoup4
-progressbar2
+
+# System dependency (must be installed separately):
+# - wget (install via: apt-get install wget / dnf install wget / brew install wget)
